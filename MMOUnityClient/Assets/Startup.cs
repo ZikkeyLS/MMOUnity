@@ -3,19 +3,78 @@ using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Text;
 using UnityEngine;
+using UnityEngine.Events;
 
-public class Packet
+public enum PacketType : ushort
 {
-    public List<byte> data = new List<byte>() { 1, 2, 3, 4, 5, 6, 7, 8 };
+    // Client packet
+    RequestRegister = 0,
+    RequestLogin = 1,
+    GetChatMessage = 3,
+    // Server packet
+    ResponseRegister = 10000,
+    ResponseLogin = 10001,
+}
+
+public class PacketWrite
+{
+    public List<byte> data = new List<byte>();
+
+    public PacketType type;
+
+    public PacketWrite(PacketType packetType)
+    {
+        type = packetType;
+    }
+
+    public void WriteString(string message)
+    {
+        byte[] messageData = Encoding.UTF8.GetBytes(message);
+
+        data.AddRange(BitConverter.GetBytes(messageData.Length));
+        data.AddRange(messageData);
+    }
 
     public byte[] ToArray()
     {
-        return data.ToArray();
+        List<byte> result = new List<byte>();
+        result.AddRange(BitConverter.GetBytes((ushort)type));
+        result.AddRange(data);
+        return result.ToArray();
     }
 
     public int Length()
     {
-        return data.Count;
+        return data.Count + sizeof(ushort);
+    }
+}
+
+public class PacketRead
+{
+    public byte[] byteArray;
+    public PacketType type;
+    public int currentByte = 0;
+
+    public string ReadString()
+    {
+        int size = BitConverter.ToInt32(byteArray, currentByte);
+        currentByte += 4;
+        string result = Encoding.ASCII.GetString(byteArray, currentByte, size);
+        currentByte += size;
+        return result;
+    }
+
+    public PacketRead(byte[] bytes)
+    {
+        if (bytes.Length < 2)
+        {
+            return;
+        }
+
+        byteArray = bytes;
+
+        type = (PacketType)BitConverter.ToUInt16(bytes, 0);
+        currentByte += sizeof(ushort);
     }
 }
 
@@ -30,9 +89,48 @@ public class Startup : MonoBehaviour
     private NetworkStream stream;
     private byte[] receiveBuffer;
 
+    private List<PacketRead> packets = new List<PacketRead>();
+    private object locker = new object();
+
+    private static Dictionary<PacketType, UnityEvent<PacketRead>> NetworkHandlers = new Dictionary<PacketType, UnityEvent<PacketRead>>();
+    public static void AssignHandler(PacketType type, UnityAction<PacketRead> eventMessage)
+    {
+        NetworkHandlers.TryGetValue(type, out var unityEvent);
+
+        if (unityEvent == null)
+        {
+            unityEvent = new UnityEvent<PacketRead>();
+            NetworkHandlers.Add(type, unityEvent);
+        }
+
+        if (unityEvent != null)
+        {
+            unityEvent.AddListener(eventMessage);
+        }
+    }
+
     private void Start()
     {
+        Application.runInBackground = true;
+
         Connect();
+    }
+
+    private void Update()
+    {
+        lock (locker)
+        {
+            foreach (var packetRead in packets)
+            {
+                NetworkHandlers.TryGetValue(packetRead.type, out var handler);
+                if (handler != null)
+                {
+                    handler.Invoke(packetRead);
+                }
+            }
+
+            packets.Clear();
+        }
     }
 
     public void Connect()
@@ -47,7 +145,7 @@ public class Startup : MonoBehaviour
         socket.BeginConnect(ip, port, ConnectCallback, socket);
     }
 
-    public void SendData(Packet packet)
+    public void SendData(PacketWrite packet)
     {
         try
         {
@@ -71,6 +169,8 @@ public class Startup : MonoBehaviour
             return;
         }
 
+        print("Connected");
+
         stream = socket.GetStream();
 
         stream.BeginRead(receiveBuffer, 0, dataBufferSize, ReceiveCallback, null);
@@ -83,7 +183,7 @@ public class Startup : MonoBehaviour
             int _byteLength = stream.EndRead(_result);
             if (_byteLength <= 0)
             {
-                Disconnect();
+                Disconnect("0 byte length");
                 return;
             }
 
@@ -96,30 +196,36 @@ public class Startup : MonoBehaviour
         }
         catch
         {
-            Disconnect();
+            Disconnect("error");
         }
     }
 
     private void HandleData(byte[] data)
     {
-        if (data.Length < 1)
+        if (data.Length < 2)
         {
             return;
         }
 
-        StringBuilder aa = new StringBuilder();
-        for (int i = 0; i < data.Length; i++)
+        PacketRead packetRead = new PacketRead(data);
+
+        lock (locker)
         {
-            aa.Append(data[i].ToString());
+            packets.Add(packetRead);
         }
-        print(aa.ToString());
     }
 
-    private void Disconnect()
+    private void Disconnect(string reason = "")
     {
-        socket.Dispose();
+        print("Disconnected " + reason);
+
+        if (socket != null)
+        {
+            socket.Dispose();
+        }
         stream = null;
         receiveBuffer = null;
+        socket = null;
     }
 
     private void OnApplicationQuit()

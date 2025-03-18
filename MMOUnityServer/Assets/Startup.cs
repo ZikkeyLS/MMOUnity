@@ -1,9 +1,11 @@
+using JetBrains.Annotations;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using UnityEngine;
 
 [Serializable]
@@ -13,18 +15,76 @@ public class Settings
     public int maxPlayers = 100;
 }
 
-public class Packet
+public enum PacketType : ushort
 {
-    public List<byte> data = new List<byte>() { 1, 2, 3, 4, 5, 6, 7, 8 };
+    // Client packet
+    RequestRegister = 0,
+    RequestLogin = 1,
+    GetChatMessage = 3,
+    // Server packet
+    ResponseRegister = 10000,
+    ResponseLogin = 10001,
+}
+
+public class PacketWrite
+{
+    public List<byte> data = new List<byte>();
+
+    public PacketType type;
+
+    public PacketWrite(PacketType packetType)
+    {
+        type = packetType;
+    }
+
+    public void WriteString(string message)
+    {
+        byte[] messageData = Encoding.UTF8.GetBytes(message);
+
+        data.AddRange(BitConverter.GetBytes(messageData.Length));
+        data.AddRange(messageData);
+    }
 
     public byte[] ToArray()
     {
-        return data.ToArray();
+        List<byte> result = new List<byte>();
+        result.AddRange(BitConverter.GetBytes((ushort)type));
+        result.AddRange(data);
+        return result.ToArray();
     }
 
     public int Length()
     {
-        return data.Count;
+        return data.Count + sizeof(ushort);
+    }
+}
+
+public class PacketRead
+{
+    public byte[] byteArray;
+    public PacketType type;
+    public int currentByte = 0;
+
+    public string ReadString()
+    {
+        int size = BitConverter.ToInt32(byteArray, currentByte);
+        currentByte += 4;
+        string result = Encoding.ASCII.GetString(byteArray, currentByte, size);
+        currentByte += size;
+        return result;
+    }
+
+    public PacketRead(byte[] bytes)
+    {
+        if (bytes.Length < 2)
+        {
+            return;
+        }
+
+        byteArray = bytes;
+
+        type = (PacketType)BitConverter.ToUInt16(bytes, 0);
+        currentByte += sizeof(ushort);
     }
 }
 
@@ -49,17 +109,15 @@ public class Client
         receiveBuffer = new byte[dataBufferSize];
 
         stream.BeginRead(receiveBuffer, 0, dataBufferSize, ReceiveCallback, null);
-
-        SendData(new Packet());
     }
 
     public bool Connected => socket != null;
 
-    public void SendData(Packet packet)
+    public void SendData(PacketWrite packet)
     {
         try
         {
-            if (socket != null)
+            if (socket != null && stream != null)
             {
                 stream.BeginWrite(packet.ToArray(), 0, packet.Length(), null, null);
             }
@@ -77,7 +135,7 @@ public class Client
             int byteLength = stream.EndRead(result);
             if (byteLength <= 0)
             {
-                Disconnect();
+                Disconnect("0 byte length");
                 return;
             }
 
@@ -91,7 +149,7 @@ public class Client
         catch (Exception _ex)
         {
             Debug.Log($"Error receiving TCP data: {_ex}");
-            Disconnect();
+            Disconnect("error receiving data");
         }
     }
 
@@ -105,11 +163,14 @@ public class Client
         Debug.Log("handle data");
     }
 
-    public void Disconnect()
+    public void Disconnect(string reason = "")
     {
-        Debug.Log("CLIENT DISCONNECT");
+        Debug.Log("CLIENT DISCONNECTED: " + reason);
 
-        socket.Close();
+        if (socket != null)
+        {
+            socket.Close();
+        }
         stream = null;
         receiveBuffer = null;
         socket = null;
@@ -125,12 +186,32 @@ public class Startup : MonoBehaviour
 
     private void Start()
     {
+        Application.runInBackground = true;
+        Application.targetFrameRate = 30;
+
         LoadSettings();
         RunServer();
     }
 
+    private void Update()
+    {
+        foreach (var client in clients)
+        {
+            PacketWrite packet = new PacketWrite(PacketType.GetChatMessage);
+            packet.WriteString(DateTime.Now.ToString());
+
+            client.Value.SendData(packet);
+        }
+    }
+
     private void OnApplicationQuit()
     {
+        foreach (var client in clients)
+        {
+            client.Value.Disconnect();
+        }
+        clients.Clear();
+
         listener.Server.Close();
         listener.Server.Dispose();
         listener.Stop();
@@ -163,23 +244,27 @@ public class Startup : MonoBehaviour
 
         Client currentClient = new Client();
 
+        bool success = false;
         for (int i = 0; i < settings.maxPlayers; i++)
         {
             if (clients.TryGetValue(i, out Client tempClient))
             {
                 if (tempClient.Connected == false)
                 {
-                    Debug.Log($"Incoming connection from {client.Client.RemoteEndPoint}... ID: {i}");
-                    currentClient.Connect(client);
+                    success = true;
                     clients[i] = currentClient;
-                    return;
                 }
             }
             else
             {
+                success = true;
+                clients.Add(i, currentClient);
+            }
+
+            if (success)
+            {
                 Debug.Log($"Incoming connection from {client.Client.RemoteEndPoint}... ID: {i}");
                 currentClient.Connect(client);
-                clients.Add(i, currentClient);
                 return;
             }
         }
