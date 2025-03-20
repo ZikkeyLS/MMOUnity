@@ -8,14 +8,11 @@ using UnityEngine.Events;
 public enum PacketType : ushort
 {
     // Client packet
-    RequestRegister = 0,
-    RequestLogin = 1,
-    GetChatMessage = 3,
+    GetTimezone = 0,
     // Server packet
     ResponseRegister = 10000,
     ResponseLogin = 10001,
 }
-
 public class PacketWrite
 {
     public List<byte> data = new List<byte>();
@@ -80,6 +77,8 @@ public class PacketRead
 
 public class Startup : MonoBehaviour
 {
+    public static Startup Instance;
+
     public const int dataBufferSize = 4096;
 
     public string ip = "127.0.0.1";
@@ -92,8 +91,8 @@ public class Startup : MonoBehaviour
     private List<PacketRead> packets = new List<PacketRead>();
     private object locker = new object();
 
-    private static Dictionary<PacketType, UnityEvent<PacketRead>> NetworkHandlers = new Dictionary<PacketType, UnityEvent<PacketRead>>();
-    public static void AssignHandler(PacketType type, UnityAction<PacketRead> eventMessage)
+    private Dictionary<PacketType, UnityEvent<PacketRead>> NetworkHandlers = new Dictionary<PacketType, UnityEvent<PacketRead>>();
+    public void AssignHandler(PacketType type, UnityAction<PacketRead> eventMessage)
     {
         NetworkHandlers.TryGetValue(type, out var unityEvent);
 
@@ -107,6 +106,11 @@ public class Startup : MonoBehaviour
         {
             unityEvent.AddListener(eventMessage);
         }
+    }
+
+    private void Awake()
+    {
+        Instance = this;
     }
 
     private void Start()

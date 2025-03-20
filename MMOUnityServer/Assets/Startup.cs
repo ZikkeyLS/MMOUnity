@@ -1,12 +1,11 @@
-using JetBrains.Annotations;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using UnityEngine;
+using UnityEngine.Events;
 
 [Serializable]
 public class Settings
@@ -18,9 +17,7 @@ public class Settings
 public enum PacketType : ushort
 {
     // Client packet
-    RequestRegister = 0,
-    RequestLogin = 1,
-    GetChatMessage = 3,
+    GetTimezone = 0,
     // Server packet
     ResponseRegister = 10000,
     ResponseLogin = 10001,
@@ -94,12 +91,13 @@ public class Client
 
     public TcpClient socket;
 
-    private readonly int id;
+    private int id;
     private NetworkStream stream;
     private byte[] receiveBuffer;
 
-    public void Connect(TcpClient socket)
+    public void Connect(TcpClient socket, int id)
     {
+        this.id = id;
         this.socket = socket;
         this.socket.ReceiveBufferSize = dataBufferSize;
         this.socket.SendBufferSize = dataBufferSize;
@@ -155,12 +153,17 @@ public class Client
 
     private void HandleData(byte[] data)
     {
-        if (data.Length < 1)
+        if (data.Length < 2)
         {
             return;
         }
 
-        Debug.Log("handle data");
+        PacketRead packetRead = new PacketRead(data);
+
+        lock (Startup.locker)
+        {
+            Startup.packets.Add(new KeyValuePair<int, PacketRead>(id, packetRead));
+        }
     }
 
     public void Disconnect(string reason = "")
@@ -184,6 +187,26 @@ public class Startup : MonoBehaviour
     private TcpListener listener = null;
     private Dictionary<int, Client> clients = new Dictionary<int, Client>();
 
+    public static List<KeyValuePair<int, PacketRead>> packets = new List<KeyValuePair<int, PacketRead>>();
+    public static object locker = new object();
+
+    private Dictionary<PacketType, UnityEvent<PacketRead, int>> NetworkHandlers = new Dictionary<PacketType, UnityEvent<PacketRead, int>>();
+    public void AssignHandler(PacketType type, UnityAction<PacketRead, int> eventMessage)
+    {
+        NetworkHandlers.TryGetValue(type, out var unityEvent);
+
+        if (unityEvent == null)
+        {
+            unityEvent = new UnityEvent<PacketRead, int>();
+            NetworkHandlers.Add(type, unityEvent);
+        }
+
+        if (unityEvent != null)
+        {
+            unityEvent.AddListener(eventMessage);
+        }
+    }
+
     private void Start()
     {
         Application.runInBackground = true;
@@ -191,18 +214,65 @@ public class Startup : MonoBehaviour
 
         LoadSettings();
         RunServer();
+
+        AssignHandler(PacketType.GetTimezone, GetTimezoneHandler);
+    }
+
+    private void GetTimezoneHandler(PacketRead packet, int clientId)
+    {
+        string cityName = packet.ReadString();
+
+        string result = "";
+
+        try
+        {
+            using (var webClient = new WebClient())
+            {
+                result = webClient.DownloadString($"https://www.timeapi.io/api/time/current/zone?timeZone=Europe%2F{cityName}");
+            }
+        }
+        catch(Exception ex)
+        {
+            result = "Not found";
+        }
+
+        PacketWrite response = new PacketWrite(PacketType.GetTimezone);
+        response.WriteString(result);
+
+        clients.TryGetValue(clientId, out Client client);
+        if (client != null)
+        {
+            client.SendData(response);
+        }
     }
 
     private void Update()
     {
-        foreach (var client in clients)
+        lock (locker)
         {
-            PacketWrite packet = new PacketWrite(PacketType.GetChatMessage);
-            packet.WriteString(DateTime.Now.ToString());
+            foreach (var packetRead in packets)
+            {
+                NetworkHandlers.TryGetValue(packetRead.Value.type, out var handler);
+                if (handler != null)
+                {
+                    handler.Invoke(packetRead.Value, packetRead.Key);
+                }
+            }
 
-            client.Value.SendData(packet);
+            packets.Clear();
         }
     }
+
+    //private void Update()
+    //{
+    //    foreach (var client in clients)
+    //    {
+    //        PacketWrite packet = new PacketWrite(PacketType.GetChatMessage);
+    //        packet.WriteString(DateTime.Now.ToString());
+
+    //        client.Value.SendData(packet);
+    //    }
+    //}
 
     private void OnApplicationQuit()
     {
@@ -264,7 +334,7 @@ public class Startup : MonoBehaviour
             if (success)
             {
                 Debug.Log($"Incoming connection from {client.Client.RemoteEndPoint}... ID: {i}");
-                currentClient.Connect(client);
+                currentClient.Connect(client, i);
                 return;
             }
         }
