@@ -28,6 +28,7 @@ public class TimezoneSystem : MonoBehaviour
     [SerializeField] private TMPro.TMP_InputField _input;
     [SerializeField] private TMPro.TMP_Text _errorOutput;
     [SerializeField] private Button _submit;
+    [SerializeField] private Toggle _formatToggle;
 
     [SerializeField] private TMPro.TMP_Text _cityName;
     [SerializeField] private TMPro.TMP_Text _output;
@@ -38,6 +39,7 @@ public class TimezoneSystem : MonoBehaviour
     private TimeSpan _currentTime = TimeSpan.MinValue;
     private string _currentCity = string.Empty;
     private int _currentCitySeed = 1;
+    private bool _twelveOurFormat = true;
 
     static int StringToNumber(string str)
     {
@@ -78,10 +80,10 @@ public class TimezoneSystem : MonoBehaviour
 
         if (chatMessage != "Not found")
         {
-            _output.text = chatMessage;
             _currentTime = TimeSpan.Parse(chatMessage);
             _currentCity = _input.text;
             _currentCitySeed = StringToNumber(_currentCity);
+            _twelveOurFormat = !_formatToggle.isOn;
             random = new System.Random(_currentCitySeed);
 
             _cityName.text = _currentCity;
@@ -124,9 +126,27 @@ public class TimezoneSystem : MonoBehaviour
     {
         while (true)
         {
+            if (_twelveOurFormat)
+            {
+                bool pm = _currentTime.Hours > 11;
+                string postFormat = pm ? "pm" : "am";
+
+                TimeSpan result = _currentTime;
+                if (pm)
+                {
+                    result -= TimeSpan.FromHours(12);
+                }
+
+                _output.text = $"{result.ToString()} {postFormat}";
+            }
+            else
+            {
+                _output.text = _currentTime.ToString();
+            }
+
             yield return new WaitForSeconds(1f);
+
             _currentTime += TimeSpan.FromSeconds(1f);
-            _output.text = _currentTime.ToString();
         }
     }
 }
