@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -66,7 +67,7 @@ public class PacketRead
     {
         int size = BitConverter.ToInt32(byteArray, currentByte);
         currentByte += 4;
-        string result = Encoding.ASCII.GetString(byteArray, currentByte, size);
+        string result = Encoding.UTF8.GetString(byteArray, currentByte, size);
         currentByte += size;
         return result;
     }
@@ -190,6 +191,8 @@ public class Startup : MonoBehaviour
     public static List<KeyValuePair<int, PacketRead>> packets = new List<KeyValuePair<int, PacketRead>>();
     public static object locker = new object();
 
+    private Dictionary<string, string> cityNamesUrls = new Dictionary<string, string>();
+
     private Dictionary<PacketType, UnityEvent<PacketRead, int>> NetworkHandlers = new Dictionary<PacketType, UnityEvent<PacketRead, int>>();
     public void AssignHandler(PacketType type, UnityAction<PacketRead, int> eventMessage)
     {
@@ -212,6 +215,82 @@ public class Startup : MonoBehaviour
         Application.runInBackground = true;
         Application.targetFrameRate = 30;
 
+        using (var webClient = new WebClient())
+        {
+            string data = webClient.DownloadString($"https://true-time.com/city-list/");
+
+            string match = "<a href=\"";
+            string end = "</a>";
+
+            int currentIndex = 0;
+
+            while (currentIndex < data.Length && currentIndex != -1)
+            {
+                int index = data.IndexOf(match, currentIndex);
+
+                if (currentIndex == -1 || index == -1)
+                {
+                    break;
+                }
+
+                currentIndex = index + 1;
+
+                try
+                {
+                    int endSuc = 0;
+                    int localIndex = index;
+
+                    StringBuilder aPointer = new StringBuilder();
+
+                    while (endSuc != end.Length)
+                    {
+                        if (localIndex >= data.Length)
+                        {
+                            break;
+                        }
+
+                        aPointer.Append(data[localIndex]);
+
+                        if (data[localIndex] == end[endSuc])
+                        {
+                            endSuc++;
+                        }
+                        else
+                        {
+                            endSuc = 0;
+                        }
+
+                        localIndex += 1;
+                    }
+
+                    string aData = aPointer.ToString();
+                    if (aData.Contains("Главная"))
+                    {
+                        continue;
+                    }
+
+                    aData = aData.Replace("<a href=\"", "");
+                    aData = aData.Replace("\">", "|");
+                    aData = aData.Replace("</a>", "");
+
+                    string[] parts = aData.Split("|");
+
+                    int lastIndexOf = parts[1].LastIndexOf(" ");
+                    string cityName = lastIndexOf > 0 ? parts[1].Substring(0, lastIndexOf) : parts[1];
+                    cityNamesUrls[cityName] = parts[0];
+                }
+                catch
+                {
+
+                }
+            }
+
+            foreach (var item in cityNamesUrls)
+            {
+                File.AppendAllText("cities.txt", item.Key + " " + item.Value + "\n");
+            }
+        }
+
         LoadSettings();
         RunServer();
 
@@ -222,16 +301,26 @@ public class Startup : MonoBehaviour
     {
         string cityName = packet.ReadString();
 
-        string result = "";
+        string result = "Not found";
 
         try
         {
             using (var webClient = new WebClient())
             {
-                result = webClient.DownloadString($"https://www.timeapi.io/api/time/current/zone?timeZone=Europe%2F{cityName}");
+                if (cityNamesUrls.TryGetValue(cityName, out string url))
+                {
+                    result = webClient.DownloadString($"https://true-time.com{url}");
+
+                    string template = "<span class=\"hour-minutes-string\">";
+
+                    int startIndex = result.IndexOf(template) + template.Length;
+
+                    string rawData = result.Substring(startIndex, 100);
+                    result = Regex.Replace(rawData, "[^0-9:]+", "");
+                }
             }
         }
-        catch(Exception ex)
+        catch
         {
             result = "Not found";
         }

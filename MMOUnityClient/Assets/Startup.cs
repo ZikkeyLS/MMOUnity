@@ -56,7 +56,7 @@ public class PacketRead
     {
         int size = BitConverter.ToInt32(byteArray, currentByte);
         currentByte += 4;
-        string result = Encoding.ASCII.GetString(byteArray, currentByte, size);
+        string result = Encoding.UTF8.GetString(byteArray, currentByte, size);
         currentByte += size;
         return result;
     }

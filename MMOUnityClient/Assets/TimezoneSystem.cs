@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -22,9 +24,36 @@ public class Timezone
 
 public class TimezoneSystem : MonoBehaviour
 {
+    [SerializeField] private GameObject _mainMenu;
     [SerializeField] private TMPro.TMP_InputField _input;
-    [SerializeField] private TMPro.TMP_Text _output;
+    [SerializeField] private TMPro.TMP_Text _errorOutput;
     [SerializeField] private Button _submit;
+
+    [SerializeField] private TMPro.TMP_Text _cityName;
+    [SerializeField] private TMPro.TMP_Text _output;
+
+    [SerializeField] private GameObject[] _housePrefabs;
+    [SerializeField] private List<GameObject> _currentHouses = new List<GameObject>();
+
+    private TimeSpan _currentTime = TimeSpan.MinValue;
+    private string _currentCity = string.Empty;
+    private int _currentCitySeed = 1;
+
+    static int StringToNumber(string str)
+    {
+        int hash = 0;
+        foreach (char c in str)
+        {
+            hash += c;
+        }
+        return Math.Abs(hash);
+    }
+
+    System.Random random;
+    int GetRandomNumber()
+    {
+        return random.Next(0, _housePrefabs.Length + 1);
+    }
 
     private void Start()
     {
@@ -43,16 +72,61 @@ public class TimezoneSystem : MonoBehaviour
 
     private void GetTimezoneMessage(PacketRead read)
     {
+        StopAllCoroutines();
+
         string chatMessage = read.ReadString();
 
-        try
+        if (chatMessage != "Not found")
         {
-            Timezone timezone = JsonUtility.FromJson<Timezone>(chatMessage);
-            _output.text = timezone.date + " " + timezone.time + "\n" + timezone.timeZone;
+            _output.text = chatMessage;
+            _currentTime = TimeSpan.Parse(chatMessage);
+            _currentCity = _input.text;
+            _currentCitySeed = StringToNumber(_currentCity);
+            random = new System.Random(_currentCitySeed);
+
+            _cityName.text = _currentCity;
+            _mainMenu.SetActive(false);
+
+            GenerateField();
+
+            StartCoroutine(UpdateTime());
         }
-        catch
+        else
         {
-            _output.text = "Not found";
+            _errorOutput.text = "Город не найден!";
+        }
+    }
+
+    private void GenerateField()
+    {
+        _currentHouses.ForEach((house) => Destroy(house));
+        _currentHouses.Clear();
+
+        for (int x = 0; x < 10; x++)
+        {
+            for (int y = 0; y < 10; y++)
+            {
+                int number = GetRandomNumber();
+
+                if (number == _housePrefabs.Length)
+                {
+                    continue;
+                }
+                else
+                {
+                    _currentHouses.Add(Instantiate(_housePrefabs[number], new Vector3(x * 3, 0, y * 3), Quaternion.identity));
+                }
+            }
+        }
+    }
+
+    private IEnumerator UpdateTime()
+    {
+        while (true)
+        {
+            yield return new WaitForSeconds(1f);
+            _currentTime += TimeSpan.FromSeconds(1f);
+            _output.text = _currentTime.ToString();
         }
     }
 }
