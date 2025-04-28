@@ -24,6 +24,8 @@ public class Timezone
 
 public class TimezoneSystem : MonoBehaviour
 {
+    public static TimezoneSystem Instance = null;
+
     [SerializeField] private GameObject _mainMenu;
     [SerializeField] private TMPro.TMP_InputField _input;
     [SerializeField] private TMPro.TMP_Text _errorOutput;
@@ -41,6 +43,8 @@ public class TimezoneSystem : MonoBehaviour
     private int _currentCitySeed = 1;
     private bool _twelveOurFormat = true;
 
+    public TimeSpan CurrentTime => _currentTime;
+
     static int StringToNumber(string str)
     {
         int hash = 0;
@@ -55,6 +59,16 @@ public class TimezoneSystem : MonoBehaviour
     int GetRandomNumber()
     {
         return random.Next(0, _housePrefabs.Length + 1);
+    }
+
+    private void Awake()
+    {
+        if (Instance)
+        {
+            Debug.LogWarning("Instance of TimezoneSystem already exists!");
+            Destroy(this);
+        }
+        Instance = this;
     }
 
     private void Start()
@@ -76,12 +90,13 @@ public class TimezoneSystem : MonoBehaviour
     {
         StopAllCoroutines();
 
+        string cityName = read.ReadString();
         string chatMessage = read.ReadString();
 
         if (chatMessage != "Not found")
         {
             _currentTime = TimeSpan.Parse(chatMessage);
-            _currentCity = _input.text;
+            _currentCity = cityName;
             _currentCitySeed = StringToNumber(_currentCity);
             _twelveOurFormat = !_formatToggle.isOn;
             random = new System.Random(_currentCitySeed);

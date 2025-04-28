@@ -297,11 +297,53 @@ public class Startup : MonoBehaviour
         AssignHandler(PacketType.GetTimezone, GetTimezoneHandler);
     }
 
+    private bool IsActualBy(string first, string second, int power = 1)
+    {
+        if (Math.Abs(first.Length - second.Length) > power)
+        {
+            return false;
+        }
+
+        int difference = second.Length - first.Length;
+        if (difference < 0)
+        {
+            difference = 0;
+        }
+        
+        for (int i = 0; i < first.Length; i++)
+        {
+            if (second.Length == i)
+            {
+                if (difference == power)
+                {
+                    return false;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (first[i] != second[i])
+            {
+                difference += 1;
+
+                if (difference > power)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     private void GetTimezoneHandler(PacketRead packet, int clientId)
     {
         string cityName = packet.ReadString();
 
         string result = "Not found";
+        string outputCity = cityName;
 
         try
         {
@@ -317,15 +359,71 @@ public class Startup : MonoBehaviour
 
                     string rawData = result.Substring(startIndex, 100);
                     result = Regex.Replace(rawData, "[^0-9:]+", "");
+                    outputCity = cityName;
+                }
+                else
+                {
+                    foreach (var city in cityNamesUrls)
+                    {
+                        string current = city.Key.ToLower();
+                        string ourCity = cityName.ToLower();
+
+                        if (((current.Contains(ourCity) || ourCity.Contains(current)) && Math.Abs(ourCity.Length - current.Length) <= 1)
+                            || IsActualBy(current, ourCity, 1))
+                        {
+                            result = webClient.DownloadString($"https://true-time.com{city.Value}");
+
+                            string template = "<span class=\"hour-minutes-string\">";
+
+                            int startIndex = result.IndexOf(template) + template.Length;
+
+                            string rawData = result.Substring(startIndex, 100);
+                            result = Regex.Replace(rawData, "[^0-9:]+", "");
+                            outputCity = city.Key;
+                            break;
+                        }
+                    }
                 }
             }
         }
         catch
         {
+            try
+            {
+                using (var webClient = new WebClient())
+                {
+                    foreach (var city in cityNamesUrls)
+                    {
+                        string current = city.Key.ToLower();
+                        string ourCity = cityName;
+
+                        if (((current.Contains(ourCity) || ourCity.Contains(current)) && Math.Abs(ourCity.Length - current.Length) <= 1)
+                            || IsActualBy(current, ourCity, 1))
+                        {
+                            result = webClient.DownloadString($"https://true-time.com{city.Value}");
+
+                            string template = "<span class=\"hour-minutes-string\">";
+
+                            int startIndex = result.IndexOf(template) + template.Length;
+
+                            string rawData = result.Substring(startIndex, 100);
+                            result = Regex.Replace(rawData, "[^0-9:]+", "");
+                            outputCity = city.Key;
+                            break;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                result = "Not found";
+            }
+
             result = "Not found";
         }
 
         PacketWrite response = new PacketWrite(PacketType.GetTimezone);
+        response.WriteString(outputCity);
         response.WriteString(result);
 
         clients.TryGetValue(clientId, out Client client);
